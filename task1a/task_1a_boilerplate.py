@@ -6,6 +6,7 @@ import json
 import time
 
 import paho.mqtt.client as mqtt
+from collections import deque
 
 MAZE_ROWS = 13
 MAZE_COLS = 13
@@ -86,13 +87,86 @@ HEADING_DELTA = {
 # ============================================================================
 # YOUR ALGORITHM GOES HERE. Everything above and below is plumbing.
 # ============================================================================
+def get_valid_neighbors(row, col):
+    """Returns valid, unblocked neighboring cells for the 13x13 arena."""
+    neighbors = []
+    cell_val = WALLS[row][col]
+
+    # North: row + 1 (WALL_N = 0x1)
+    if not (cell_val & WALL_N) and row + 1 < MAZE_ROWS:
+        neighbors.append((row + 1, col))
+    # East: col + 1 (WALL_E = 0x2)
+    if not (cell_val & WALL_E) and col + 1 < MAZE_COLS:
+        neighbors.append((row, col + 1))
+    # South: row - 1 (WALL_S = 0x4)
+    if not (cell_val & WALL_S) and row - 1 >= 0:
+        neighbors.append((row - 1, col))
+    # West: col - 1 (WALL_W = 0x8)
+    if not (cell_val & WALL_W) and col - 1 >= 0:
+        neighbors.append((row, col - 1))
+
+    return neighbors
+
+def bfs_path(start, goals):
+    """Finds the shortest path from start cell to the nearest goal cell."""
+    if not goals or start in goals:
+        return []
+
+    queue = deque([[start]])
+    visited = {start}
+
+    while queue:
+        path = queue.popleft()
+        curr = path[-1]
+
+        if curr in goals:
+            return path
+
+        for neighbor in get_valid_neighbors(curr[0], curr[1]):
+            if neighbor not in visited:
+                visited.add(neighbor)
+                queue.append(path + [neighbor])
+    return []
+    
 def choose_command(pacbot_cell, pacbot_yaw, pellets_remaining):
-    """FRONT/LEFT/RIGHT/BACK to send now, or None. pacbot_cell=(row,col),
-    pacbot_yaw one of HEADING_DELTA's keys, pellets_remaining=set of
-    (row,col). Implement this -- see EXIT_CELLS above for the 2 exits."""
+    """Calculates the next relative command (FRONT/LEFT/RIGHT/BACK) toward goals."""
+    if pellets_remaining:
+        targets = set(pellets_remaining)
+    else:
+        targets = {(r, c) for r, c, _ in EXIT_CELLS}
+
+    path = bfs_path(pacbot_cell, targets)
+    if not path or len(path) < 2:
+        return None
+
+    next_cell = path[1]
+    dr = next_cell[0] - pacbot_cell[0]
+    dc = next_cell[1] - pacbot_cell[1]
+
+    # Determine required global heading for (dr, dc)
+    target_yaw = None
+    for yaw_val, delta in HEADING_DELTA.items():
+        if (delta[0], delta[1]) == (dr, dc):
+            target_yaw = yaw_val
+            break
+
+    if target_yaw is None:
+        return None
+
+    # Calculate angle turn difference relative to current yaw
+    diff = (target_yaw - pacbot_yaw) % 360.0
+
+    if diff == 0.0:
+        return "FRONT"
+    elif diff == 90.0:
+        return "LEFT"
+    elif diff == 270.0:
+        return "RIGHT"
+    elif diff == 180.0:
+        return "BACK"
+
     return None
 # ============================================================================
-
 
 def parse_pellets(payload):
     return {tuple(cell) for cell in json.loads(payload)}
